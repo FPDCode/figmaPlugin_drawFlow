@@ -1,0 +1,276 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 16px 12px;
+    font: 11px/1.4 Inter, -apple-system, system-ui, sans-serif;
+    color: var(--figma-color-text, #e6e6e6);
+    background: var(--figma-color-bg, #2c2c2c);
+    user-select: none;
+  }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+  .label { margin: 8px 0 6px; font-size: 11px; font-weight: 600; color: var(--figma-color-text-secondary, #b3b3b3); }
+  .pad { display: grid; grid-template-columns: repeat(3, 36px); grid-template-rows: repeat(3, 36px); gap: 6px; justify-content: center; }
+  .pad button {
+    width: 36px; height: 36px; border-radius: 6px; font-weight: 700; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--figma-color-border, #444);
+    background: var(--figma-color-bg-secondary, #383838);
+    color: var(--figma-color-text, #e6e6e6);
+  }
+  .pad button.empty { visibility: hidden; }
+  .pad button.on {
+    background: var(--figma-color-bg-brand, #0d99ff);
+    border-color: var(--figma-color-bg-brand, #0d99ff);
+    color: var(--figma-color-text-onbrand, #fff);
+  }
+  .pad button.center { font-size: 9px; font-weight: 600; letter-spacing: .02em; }
+  select, input[type=number], input[type=text] {
+    width: 100%; height: 30px; padding: 0 8px; border-radius: 6px; font: inherit;
+    color: var(--figma-color-text, #e6e6e6);
+    background: var(--figma-color-bg-secondary, #383838);
+    border: 1px solid var(--figma-color-border, #444);
+  }
+  .line { display: grid; grid-template-columns: 1.3fr .8fr 1fr; gap: 8px; }
+  .sel {
+    margin-top: 12px; padding: 8px 10px; border-radius: 6px; display: flex; align-items: center; gap: 8px;
+    background: var(--figma-color-bg-secondary, #383838); min-height: 34px;
+  }
+  .sel .names { flex: 1; overflow: hidden; }
+  .sel .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sel .name b { color: var(--figma-color-text-secondary, #b3b3b3); font-weight: 600; margin-right: 4px; }
+  .sel .warn { color: var(--figma-color-text-warning, #f2c94c); }
+  .sel .hint { color: var(--figma-color-text-tertiary, #8c8c8c); font-size: 10px; margin-top: 2px; white-space: normal; }
+  .swap {
+    height: 26px; padding: 0 8px; border-radius: 6px; cursor: pointer; font: inherit;
+    border: 1px solid var(--figma-color-border, #444);
+    background: transparent; color: var(--figma-color-text, #e6e6e6);
+  }
+  .swap:disabled { opacity: .4; cursor: default; }
+  .primary {
+    margin-top: 12px; width: 100%; height: 40px; border: 0; border-radius: 6px; font: inherit; font-size: 13px; font-weight: 600;
+    background: var(--figma-color-bg-brand, #0d99ff); color: var(--figma-color-text-onbrand, #fff); cursor: pointer;
+  }
+  .primary:disabled { opacity: .45; cursor: default; }
+  .status { margin-top: 8px; min-height: 16px; color: var(--figma-color-text-secondary, #b3b3b3); }
+  .status.err { color: var(--figma-color-text-danger, #f24822); }
+</style>
+</head>
+<body>
+  <div class="cols">
+    <div>
+      <h2>Start Object</h2>
+      <div class="label">Position</div>
+      <div class="pad" id="padStart"></div>
+      <div class="label">Arrow Type</div>
+      <select id="startCap"></select>
+    </div>
+    <div>
+      <h2>End Object</h2>
+      <div class="label">Position</div>
+      <div class="pad" id="padEnd"></div>
+      <div class="label">Arrow Type</div>
+      <select id="endCap"></select>
+    </div>
+  </div>
+
+  <div class="label">Line</div>
+  <div class="line">
+    <select id="lineType">
+      <option value="ELBOWED">Elbowed</option>
+      <option value="STRAIGHT">Straight</option>
+      <option value="CURVED">Curved</option>
+    </select>
+    <input id="strokeWeight" type="number" min="0.1" max="100" step="0.5" title="Stroke weight">
+    <input id="color" type="text" maxlength="7" spellcheck="false" title="Stroke color (hex)">
+  </div>
+
+  <div class="sel" id="tplRow">
+    <div class="names" id="tplNames"><span class="warn">No template connector yet.</span></div>
+    <button class="swap" id="loadTpl" title="Use the selected connector as the template for new arrows" disabled>Load as template</button>
+  </div>
+
+  <div class="sel">
+    <div class="names" id="selNames"><span class="warn">Select two objects on the canvas.</span></div>
+    <button class="swap" id="swap" title="Swap start and end" disabled>⇄ Swap</button>
+  </div>
+
+  <button class="primary" id="create" disabled>Create Arrow</button>
+  <div class="status" id="status"></div>
+  <button class="swap" id="diag" style="margin-top:8px" title="Probe which connector endpoints Figma accepts">Run diagnostics</button>
+  <pre id="diagOut" style="display:none;margin:8px 0 0;padding:8px;border-radius:6px;font-size:10px;line-height:1.35;white-space:pre-wrap;user-select:text;background:var(--figma-color-bg-secondary,#383838)"></pre>
+
+<script>
+  var CAPS = [
+    ['NONE', 'None'],
+    ['ARROW_LINES', 'Arrow Lines'],
+    ['ARROW_EQUILATERAL', 'Arrow Equilateral'],
+    ['TRIANGLE_FILLED', 'Triangle Filled'],
+    ['DIAMOND_FILLED', 'Diamond Filled'],
+    ['CIRCLE_FILLED', 'Circle Filled']
+  ];
+  // 3x3 pad: row-major; null = empty cell. Center = AUTO (FigJam's automatic magnet).
+  var PAD = [null, 'TOP', null, 'LEFT', 'AUTO', 'RIGHT', null, 'BOTTOM', null];
+  var PAD_LABEL = { TOP: 'T', LEFT: 'L', RIGHT: 'R', BOTTOM: 'B', AUTO: 'AUTO' };
+
+  var state = {
+    settings: { startMagnet: 'AUTO', endMagnet: 'AUTO', startCap: 'NONE', endCap: 'ARROW_LINES',
+                lineType: 'ELBOWED', strokeWeight: 4, color: '#757575', cornerRadius: 24 },
+    selection: { count: 0, nodes: [], hasConnector: false },
+    template: { id: null, name: null, source: null, page: null },
+    swapped: false
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function buildPad(el, key) {
+    el.innerHTML = '';
+    PAD.forEach(function (m) {
+      var b = document.createElement('button');
+      if (!m) { b.className = 'empty'; b.tabIndex = -1; el.appendChild(b); return; }
+      b.textContent = PAD_LABEL[m];
+      b.dataset.m = m;
+      if (m === 'AUTO') b.classList.add('center');
+      b.addEventListener('click', function () { state.settings[key] = m; render(); save(); });
+      el.appendChild(b);
+    });
+  }
+  function fillCaps(sel) {
+    sel.innerHTML = '';
+    CAPS.forEach(function (c) {
+      var o = document.createElement('option'); o.value = c[0]; o.textContent = c[1]; sel.appendChild(o);
+    });
+  }
+
+  function renderPad(el, value) {
+    Array.prototype.forEach.call(el.children, function (b) {
+      if (b.dataset.m) b.classList.toggle('on', b.dataset.m === value);
+    });
+  }
+
+  function render() {
+    var s = state.settings;
+    renderPad($('padStart'), s.startMagnet);
+    renderPad($('padEnd'), s.endMagnet);
+    $('startCap').value = s.startCap;
+    $('endCap').value = s.endCap;
+    $('lineType').value = s.lineType;
+    $('strokeWeight').value = s.strokeWeight;
+    $('color').value = s.color;
+
+    var n = state.selection.nodes.slice();
+    if (state.swapped && n.length === 2) n.reverse();
+    var ok = state.selection.count === 2;
+    var names = $('selNames');
+    if (state.selection.count === 0) {
+      names.innerHTML = '<span class="warn">Select two objects on the canvas.</span>';
+    } else if (!ok) {
+      names.innerHTML = '<span class="warn">' + state.selection.count + ' selected — select exactly two.</span>';
+    } else {
+      var label = function (node) {
+        return esc(node.name)
+          + (node.locked ? ' <span class="warn">(locked — unlock it)</span>' : '')
+          + (node.inInstance ? ' <span class="hint">(inside instance → anchor rect)</span>' : '');
+      };
+      names.innerHTML =
+        '<div class="name"><b>Start</b>' + label(n[0]) + '</div>' +
+        '<div class="name"><b>End</b>' + label(n[1]) + '</div>' +
+        (state.selection.hasConnector
+          ? '<div class="name hint">Selected connector will be re-pointed</div>'
+          : '<div class="name hint">Order = click order (shift-click). ⇄ Swap to flip.</div>');
+    }
+    $('swap').disabled = !ok;
+    $('create').disabled = !ok;
+
+    var tpl = state.template, tn = $('tplNames');
+    if (tpl && tpl.id) {
+      tn.innerHTML = '<div class="name"><b>Template</b>' + esc(tpl.name) + ' ✓</div>' +
+        '<div class="name hint">' + (tpl.source === 'auto' ? 'auto-detected' : 'loaded') +
+        (tpl.page ? ' · page “' + esc(tpl.page) + '”' : '') + ' — new arrows are duplicated from it</div>';
+    } else {
+      tn.innerHTML = '<span class="warn">No template connector yet.</span>' +
+        '<div class="name hint">Paste a connector from FigJam, select it, then Load as template.</div>';
+    }
+    $('loadTpl').disabled = !state.selection.hasConnector;
+    $('loadTpl').textContent = (tpl && tpl.id && state.selection.hasConnector) ? 'Replace template' : 'Load as template';
+  }
+
+  function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  function readInputs() {
+    var s = state.settings;
+    s.startCap = $('startCap').value;
+    s.endCap = $('endCap').value;
+    s.lineType = $('lineType').value;
+    s.strokeWeight = parseFloat($('strokeWeight').value) || 4;
+    var c = $('color').value.trim();
+    if (c && c[0] !== '#') c = '#' + c;
+    if (/^#[0-9a-fA-F]{6}$/.test(c)) s.color = c;
+  }
+  function save() { readInputs(); post({ type: 'save-settings', settings: state.settings }); }
+  function post(m) { parent.postMessage({ pluginMessage: m }, '*'); }
+  function setStatus(t, err) { var el = $('status'); el.textContent = t || ''; el.classList.toggle('err', !!err); }
+
+  buildPad($('padStart'), 'startMagnet');
+  buildPad($('padEnd'), 'endMagnet');
+  fillCaps($('startCap'));
+  fillCaps($('endCap'));
+  ['startCap', 'endCap', 'lineType', 'strokeWeight', 'color'].forEach(function (id) {
+    $(id).addEventListener('change', function () { save(); render(); });
+  });
+  $('swap').addEventListener('click', function () { state.swapped = !state.swapped; render(); });
+  $('loadTpl').addEventListener('click', function () { post({ type: 'load-template' }); });
+  $('diag').addEventListener('click', function () { setStatus('Running diagnostics…'); post({ type: 'diagnose' }); });
+  $('create').addEventListener('click', function () {
+    readInputs();
+    setStatus('Creating…');
+    $('create').disabled = true;
+    var s = Object.assign({}, state.settings, { swapped: state.swapped });
+    post({ type: 'create', settings: s });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !$('create').disabled) $('create').click();
+    if (e.key === 'Escape') post({ type: 'close' });
+  });
+
+  window.onmessage = function (event) {
+    var msg = event.data && event.data.pluginMessage;
+    if (!msg) return;
+    switch (msg.type) {
+      case 'init':
+        state.settings = Object.assign(state.settings, msg.settings || {});
+        state.selection = msg.selection || state.selection;
+        render();
+        break;
+      case 'selection':
+        state.selection = msg;
+        state.swapped = false; // selection changed: reset direction override
+        render();
+        break;
+      case 'template':
+        state.template = msg;
+        render();
+        break;
+      case 'diag':
+        setStatus('');
+        var pre = $('diagOut'); pre.style.display = 'block'; pre.textContent = (msg.lines || []).join('\n');
+        parent.postMessage({ pluginMessage: { type: 'resize', height: 620 + Math.min(300, 14 * (msg.lines || []).length) } }, '*');
+        break;
+      case 'result':
+        render();
+        if (msg.ok) {
+          if (msg.mode === 'vector') setStatus(msg.message + (msg.notes && msg.notes.length ? ' (' + msg.notes.join('; ') + ')' : ''), false);
+          else if (msg.mode === 'repoint') setStatus('Live connector: ' + msg.start + ' → ' + msg.end, false);
+          else setStatus('Live connector: ' + msg.start + ' → ' + msg.end + (msg.strategy ? ' (via ' + msg.strategy + ')' : ''), false);
+        }
+        else setStatus(msg.message || 'Failed.', true);
+        break;
+    }
+  };
+</script>
+</body>
+</html>
