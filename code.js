@@ -19,7 +19,7 @@
 //    For those we create an invisible unlocked "anchor" rectangle (no fill/stroke) at the same
 //    absolute position inside the instance's parent frame, and attach the connector to that.
 
-figma.showUI(__html__, { width: 320, height: 620, themeColors: true });
+figma.showUI(__html__, { width: 320, height: 810, themeColors: true });
 
 const SETTINGS_KEY = 'drawflow.settings.v1';
 const MAGNETS = ['AUTO', 'TOP', 'LEFT', 'RIGHT', 'BOTTOM', 'CENTER'];
@@ -264,6 +264,7 @@ async function configureConnector(c, start, end, s) {
   } catch (e) {
     // Non-fatal: the arrow is still valid, only the inherited label survives.
   }
+  try { await matchLabelToLine(c); } catch (e) { /* label colour is cosmetic */ }
   return c;
 }
 
@@ -392,6 +393,132 @@ async function handleCreate(rawSettings) {
   return { type: 'result', ok: true, mode: 'vector', id: v.id, message: hint, notes: notes };
 }
 
+// ---------- anchors: remove helper rectangles ----------
+
+function isAnchor(n) {
+  if (n.type !== 'RECTANGLE') return false;
+  const tag = n.getPluginData('drawflow');
+  if (tag && tag.indexOf('anchor:') === 0) return true;
+  // fallback for anchors created before tagging: name + invisible
+  return n.name.indexOf('Anchor · ') === 0 && (!n.fills || n.fills.length === 0) && (!n.strokes || n.strokes.length === 0);
+}
+
+// Removes anchors inside the given roots (or the roots themselves); optionally also the arrows
+// attached to them. Returns counts.
+function removeAnchors(roots, removeArrows) {
+  const seen = {};
+  const anchors = [];
+  for (const root of roots) {
+    if (isAnchor(root) && !seen[root.id]) { seen[root.id] = true; anchors.push(root); }
+    if ('findAllWithCriteria' in root) {
+      root.findAllWithCriteria({ types: ['RECTANGLE'] }).forEach(function (n) {
+        if (isAnchor(n) && !seen[n.id]) { seen[n.id] = true; anchors.push(n); }
+      });
+    }
+  }
+  const attached = [];
+  if (anchors.length) {
+    figma.currentPage.findAllWithCriteria({ types: ['CONNECTOR'] }).forEach(function (c) {
+      const s = c.connectorStart, e = c.connectorEnd;
+      if ((s && seen[s.endpointNodeId]) || (e && seen[e.endpointNodeId])) attached.push(c);
+    });
+  }
+  if (removeArrows) attached.forEach(function (c) { c.remove(); });
+  anchors.forEach(function (a) { a.remove(); });
+  return { removed: anchors.length, attached: attached.length, arrowsRemoved: removeArrows ? attached.length : 0 };
+}
+
+// ---------- labels: match label text colour to the connector's line ----------
+
+function samePaint(a, b) {
+  const oa = a.opacity == null ? 1 : a.opacity, ob = b.opacity == null ? 1 : b.opacity;
+  return a.type === 'SOLID' && b.type === 'SOLID' && Math.abs(oa - ob) < 0.001 &&
+    Math.abs(a.color.r - b.color.r) < 0.002 && Math.abs(a.color.g - b.color.g) < 0.002 && Math.abs(a.color.b - b.color.b) < 0.002;
+}
+
+// Sets a connector's label fill to its stroke paint. Returns 'changed' | 'same' | 'nolabel' | 'nostroke'.
+async function matchLabelToLine(c) {
+  let chars = '';
+  try { chars = c.text.characters; } catch (e) { return 'nolabel'; }
+  if (!chars || !chars.length) return 'nolabel';
+  const stroke = (c.strokes || []).filter(function (p) { return p.type === 'SOLID' && p.visible !== false; })[0];
+  if (!stroke) return 'nostroke';
+  const target = { type: 'SOLID', color: { r: stroke.color.r, g: stroke.color.g, b: stroke.color.b }, opacity: stroke.opacity == null ? 1 : stroke.opacity };
+  const cur = c.text.fills;
+  if (cur !== figma.mixed && cur.length === 1 && samePaint(cur[0], target)) return 'same';
+  const fonts = c.text.getRangeAllFontNames(0, chars.length);
+  for (const f of fonts) await figma.loadFontAsync(f);
+  c.text.fills = [target];
+  return 'changed';
+}
+
+async function matchAllLabels(scope) {
+  let pages = [figma.currentPage];
+  if (scope === 'all') { await figma.loadAllPagesAsync(); pages = figma.root.children.slice(); }
+  const r = { scanned: 0, labelled: 0, changed: 0, same: 0, errors: [] };
+  for (const page of pages) {
+    const cs = page.findAllWithCriteria({ types: ['CONNECTOR'] });
+    for (const c of cs) {
+      r.scanned++;
+      try {
+        const res = await matchLabelToLine(c);
+        if (res === 'changed') { r.labelled++; r.changed++; }
+        else if (res === 'same') { r.labelled++; r.same++; }
+        else if (res === 'nostroke') { r.labelled++; r.errors.push(c.name + ': no solid stroke'); }
+      } catch (e) {
+        r.errors.push(c.name + ': ' + (e && e.message ? e.message : String(e)));
+      }
+    }
+  }
+  return r;
+}
+
+// Quiet sync of the current page's label colours — runs on launch and after each arrow.
+async function autoSyncLabels() {
+  try {
+    const r = await matchAllLabels('page');
+    if (r.changed) figma.notify(r.changed + ' connector label' + (r.changed === 1 ? '' : 's') + ' recoloured to match the line');
+    return r;
+  } catch (e) { return null; }
+}
+
+// Live sync while the plugin is open: any change to a CONNECTOR on the current page (e.g. a label
+// being typed) queues it; after a short debounce its label is recoloured to the line. Our own
+// recolour triggers one more change, which resolves as 'same' and stops the loop.
+let liveTimer = null;
+const livePending = {};
+let livePage = null;
+
+function onNodeChange(event) {
+  let queued = false;
+  for (const ch of event.nodeChanges) {
+    if (ch.type === 'PROPERTY_CHANGE' && ch.node && !ch.node.removed && ch.node.type === 'CONNECTOR') {
+      livePending[ch.node.id] = true; queued = true;
+    }
+  }
+  if (!queued) return;
+  if (liveTimer) clearTimeout(liveTimer);
+  liveTimer = setTimeout(flushLiveSync, 400);
+}
+
+async function flushLiveSync() {
+  liveTimer = null;
+  const ids = Object.keys(livePending);
+  for (const id of ids) {
+    delete livePending[id];
+    try {
+      const n = await figma.getNodeByIdAsync(id);
+      if (n && !n.removed && n.type === 'CONNECTOR') await matchLabelToLine(n);
+    } catch (e) { /* cosmetic; ignore */ }
+  }
+}
+
+function attachLiveSync() {
+  if (livePage && !livePage.removed) { try { livePage.off('nodechange', onNodeChange); } catch (e) {} }
+  livePage = figma.currentPage;
+  try { livePage.on('nodechange', onNodeChange); } catch (e) { /* older runtime without page events */ }
+}
+
 // ---------- diagnostics (plugin-runtime probe; results shown in the UI) ----------
 
 function describe(n) {
@@ -468,6 +595,13 @@ figma.on('selectionchange', function () {
   figma.ui.postMessage(selectionSummary());
 });
 
+figma.on('currentpagechange', function () {
+  clickOrder = [];
+  attachLiveSync();
+  figma.ui.postMessage(selectionSummary());
+  autoSyncLabels();
+});
+
 async function pushTemplate() {
   figma.ui.postMessage(await templateSummary());
 }
@@ -480,9 +614,38 @@ figma.ui.onmessage = async function (msg) {
         const res = await handleCreate(msg.settings);
         figma.ui.postMessage(res);
         await pushTemplate();
+        await autoSyncLabels();
       } catch (e) {
         figma.notify('Draw Flow: ' + (e && e.message ? e.message : String(e)), { error: true });
         figma.ui.postMessage({ type: 'result', ok: false, message: String(e && e.message ? e.message : e) });
+      }
+      break;
+    }
+    case 'remove-anchors': {
+      try {
+        const sel = figma.currentPage.selection.filter(function (n) { return n.type !== 'CONNECTOR'; });
+        const roots = sel.length ? sel : [figma.currentPage];
+        const scope = sel.length ? sel.length + ' selected object' + (sel.length === 1 ? '' : 's') : 'this page';
+        const r = removeAnchors(roots, !!msg.removeArrows);
+        const arrowWord = r.attached === 1 ? ' arrow' : ' arrows';
+        const summary = r.removed + ' anchor' + (r.removed === 1 ? '' : 's') + ' removed from ' + scope +
+          (r.attached ? ' · ' + r.attached + arrowWord + (msg.removeArrows ? ' removed' : ' kept (detached at that end)') : '');
+        figma.notify(summary, { timeout: 5000 });
+        figma.ui.postMessage({ type: 'anchors-result', ok: true, message: summary });
+      } catch (e) {
+        figma.ui.postMessage({ type: 'anchors-result', ok: false, message: String(e && e.message ? e.message : e) });
+      }
+      break;
+    }
+    case 'match-labels': {
+      try {
+        const r = await matchAllLabels(msg.scope === 'all' ? 'all' : 'page');
+        const summary = r.changed + ' label' + (r.changed === 1 ? '' : 's') + ' recoloured (' + r.labelled + ' labelled of ' + r.scanned + ' connectors' +
+          (r.same ? ', ' + r.same + ' already matched' : '') + ')' + (r.errors.length ? ' · ' + r.errors.length + ' skipped: ' + r.errors.join('; ') : '');
+        figma.notify(summary, { timeout: 5000 });
+        figma.ui.postMessage({ type: 'labels-result', ok: true, message: summary });
+      } catch (e) {
+        figma.ui.postMessage({ type: 'labels-result', ok: false, message: String(e && e.message ? e.message : e) });
       }
       break;
     }
@@ -514,7 +677,7 @@ figma.ui.onmessage = async function (msg) {
       break;
     }
     case 'resize': {
-      figma.ui.resize(320, Math.max(620, Math.min(960, Number(msg.height) || 620)));
+      figma.ui.resize(320, Math.max(810, Math.min(1110, Number(msg.height) || 810)));
       break;
     }
     case 'close': {
@@ -529,4 +692,6 @@ figma.ui.onmessage = async function (msg) {
   const stored = await figma.clientStorage.getAsync(SETTINGS_KEY);
   figma.ui.postMessage({ type: 'init', settings: sanitize(stored), selection: selectionSummary() });
   await pushTemplate();
+  attachLiveSync();
+  await autoSyncLabels();
 })();

@@ -15,6 +15,21 @@ Start = the object you clicked first, End = the one you shift-clicked second (th
 click order while it is open; a marquee selection falls back to layer order). The panel shows
 which is which; **⇄ Swap** flips them.
 
+## Labels
+Connector labels default to black at 80 % — invisible on dark canvases. **Match label colour to
+line** scans every connector on this page (or all pages) and sets each label's text fill to that
+connector's own stroke paint. No hard-coded colours: coloured lines get matching labels too.
+While the plugin is open, a label you type on any connector is recoloured live (a moment after
+you stop typing). The current page is also synced when the plugin opens and after every arrow, so
+labels typed while it was closed are fixed the next time you run it. (Pre-colouring an *empty*
+label is impossible: Figma re-applies its black default the moment text appears, and a placeholder
+space would leave a gap in the line.)
+
+## Anchors
+**Remove anchors in selection** deletes the invisible `Anchor · …` rectangles inside the selected
+frames (or on the whole page when nothing is selected). Arrows attached to them are kept
+(detached at that end) unless **Also remove the arrows attached to them** is ticked.
+
 ## How it works (and the caveats)
 Figma Design blocks plugins from making connectors: `figma.createConnector()` doesn't exist there,
 and `connector.clone()` throws *"Cloning CONNECTOR nodes is not supported in the current editor"*.

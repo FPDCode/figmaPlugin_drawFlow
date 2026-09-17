@@ -56,6 +56,8 @@
     background: var(--figma-color-bg-brand, #0d99ff); color: var(--figma-color-text-onbrand, #fff); cursor: pointer;
   }
   .primary:disabled { opacity: .45; cursor: default; }
+  .check { display: flex; align-items: center; gap: 6px; margin-top: 8px; cursor: pointer; color: var(--figma-color-text-secondary, #b3b3b3); }
+  .check input { margin: 0; accent-color: var(--figma-color-bg-brand, #0d99ff); }
   .status { margin-top: 8px; min-height: 16px; color: var(--figma-color-text-secondary, #b3b3b3); }
   .status.err { color: var(--figma-color-text-danger, #f24822); }
 </style>
@@ -101,6 +103,21 @@
 
   <button class="primary" id="create" disabled>Create Arrow</button>
   <div class="status" id="status"></div>
+
+  <div class="label">Labels</div>
+  <div class="line" style="grid-template-columns: 1fr auto;">
+    <select id="labelScope">
+      <option value="page">This page</option>
+      <option value="all">All pages</option>
+    </select>
+    <button class="swap" id="matchLabels" style="height:30px" title="Set every connector label's text colour to its own line colour">Match label colour to line</button>
+  </div>
+  <div class="status" id="labelStatus"></div>
+
+  <div class="label">Anchors</div>
+  <button class="swap" id="removeAnchors" style="height:30px;width:100%" title="Delete the invisible anchor rectangles inside the selected frames (whole page if nothing is selected)">Remove anchors in selection</button>
+  <label class="check"><input type="checkbox" id="removeArrows"> Also remove the arrows attached to them</label>
+  <div class="status" id="anchorStatus"></div>
   <button class="swap" id="diag" style="margin-top:8px" title="Probe which connector endpoints Figma accepts">Run diagnostics</button>
   <pre id="diagOut" style="display:none;margin:8px 0 0;padding:8px;border-radius:6px;font-size:10px;line-height:1.35;white-space:pre-wrap;user-select:text;background:var(--figma-color-bg-secondary,#383838)"></pre>
 
@@ -223,6 +240,14 @@
     $(id).addEventListener('change', function () { save(); render(); });
   });
   $('swap').addEventListener('click', function () { state.swapped = !state.swapped; render(); });
+  $('removeAnchors').addEventListener('click', function () {
+    $('anchorStatus').textContent = 'Removing…'; $('anchorStatus').classList.remove('err');
+    post({ type: 'remove-anchors', removeArrows: $('removeArrows').checked });
+  });
+  $('matchLabels').addEventListener('click', function () {
+    $('labelStatus').textContent = 'Scanning…'; $('labelStatus').classList.remove('err');
+    post({ type: 'match-labels', scope: $('labelScope').value });
+  });
   $('loadTpl').addEventListener('click', function () { post({ type: 'load-template' }); });
   $('diag').addEventListener('click', function () { setStatus('Running diagnostics…'); post({ type: 'diagnose' }); });
   $('create').addEventListener('click', function () {
@@ -251,6 +276,14 @@
         state.swapped = false; // selection changed: reset direction override
         render();
         break;
+      case 'anchors-result':
+        $('anchorStatus').textContent = msg.message || '';
+        $('anchorStatus').classList.toggle('err', !msg.ok);
+        break;
+      case 'labels-result':
+        $('labelStatus').textContent = msg.message || '';
+        $('labelStatus').classList.toggle('err', !msg.ok);
+        break;
       case 'template':
         state.template = msg;
         render();
@@ -258,7 +291,7 @@
       case 'diag':
         setStatus('');
         var pre = $('diagOut'); pre.style.display = 'block'; pre.textContent = (msg.lines || []).join('\n');
-        parent.postMessage({ pluginMessage: { type: 'resize', height: 620 + Math.min(300, 14 * (msg.lines || []).length) } }, '*');
+        parent.postMessage({ pluginMessage: { type: 'resize', height: 810 + Math.min(300, 14 * (msg.lines || []).length) } }, '*');
         break;
       case 'result':
         render();
